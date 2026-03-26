@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { db } = require('../db/database');
+const { prisma } = require('../db/database');
 const { authMiddleware } = require('../middleware/auth');
 
 function slugify(text) {
@@ -8,16 +8,25 @@ function slugify(text) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+function flattenImage(img) {
+  const { metadata, ...rest } = img;
+  return {
+    ...rest,
+    ...(metadata || {}),
+    extra_fields: metadata?.extra_fields ? JSON.parse(metadata.extra_fields) : [],
+  };
+}
+
 // GET /api/albums?collection_id=X — public
 router.get('/', async (req, res) => {
   try {
     const { collection_id } = req.query;
-    let sql = `SELECT a.*, COUNT(i.id) as image_count FROM albums a LEFT JOIN images i ON i.album_id = a.id WHERE a.published = true`;
-    const args = [];
-    if (collection_id) { sql += ' AND a.collection_id = ?'; args.push(collection_id); }
-    sql += ' GROUP BY a.id ORDER BY a."order" ASC';
-    const { rows } = await db.execute({ sql, args });
-    res.json(rows);
+    const albums = await prisma.album.findMany({
+      where: { published: true, ...(collection_id ? { collection_id: Number(collection_id) } : {}) },
+      orderBy: { order: 'asc' },
+      include: { _count: { select: { images: true } } },
+    });
+    res.json(albums.map(a => ({ ...a, image_count: a._count.images, _count: undefined })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -25,23 +34,45 @@ router.get('/', async (req, res) => {
 router.get('/all', authMiddleware, async (req, res) => {
   try {
     const { collection_id } = req.query;
-    let sql = `SELECT a.*, c.name as collection_name, COUNT(i.id) as image_count FROM albums a LEFT JOIN collections c ON c.id = a.collection_id LEFT JOIN images i ON i.album_id = a.id`;
-    const args = [];
-    if (collection_id) { sql += ' WHERE a.collection_id = ?'; args.push(collection_id); }
-    sql += ' GROUP BY a.id, c.name ORDER BY a."order" ASC';
-    const { rows } = await db.execute({ sql, args });
-    res.json(rows);
+    const albums = await prisma.album.findMany({
+      where: collection_id ? { collection_id: Number(collection_id) } : {},
+      orderBy: { order: 'asc' },
+      include: {
+        collection: { select: { name: true } },
+        _count: { select: { images: true } },
+      },
+    });
+    res.json(albums.map(a => ({
+      ...a,
+      collection_name: a.collection?.name,
+      collection: undefined,
+      image_count: a._count.images,
+      _count: undefined,
+    })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/albums/:id — public
 router.get('/:id', async (req, res) => {
   try {
-    const { rows } = await db.execute({ sql: 'SELECT a.*, c.name as collection_name_nav, c.slug as collection_slug FROM albums a LEFT JOIN collections c ON c.id = a.collection_id WHERE a.id = ? AND a.published = true', args: [req.params.id] });
-    if (!rows[0]) return res.status(404).json({ error: 'Álbum não encontrado' });
-    const album = rows[0];
-    const images = await db.execute({ sql: 'SELECT i.*, m.* FROM images i LEFT JOIN image_metadata m ON m.image_id = i.id WHERE i.album_id = ? ORDER BY i."order" ASC', args: [album.id] });
-    res.json({ ...album, images: images.rows });
+    const album = await prisma.album.findFirst({
+      where: { id: Number(req.params.id), published: true },
+      include: {
+        collection: { select: { name: true, slug: true } },
+        images: {
+          orderBy: { order: 'asc' },
+          include: { metadata: true },
+        },
+      },
+    });
+    if (!album) return res.status(404).json({ error: 'Álbum não encontrado' });
+    res.json({
+      ...album,
+      collection_name_nav: album.collection?.name,
+      collection_slug: album.collection?.slug,
+      collection: undefined,
+      images: album.images.map(flattenImage),
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -50,13 +81,18 @@ router.post('/', authMiddleware, async (req, res) => {
   try {
     const { title, description, cover_image, order, published, collection_id } = req.body;
     if (!title || !collection_id) return res.status(400).json({ error: 'Título e coleção são obrigatórios' });
-    const slug = slugify(title);
-    const result = await db.execute({
-      sql: `INSERT INTO albums (title, slug, description, cover_image, "order", published, collection_id) VALUES (?,?,?,?,?,?,?) RETURNING id`,
-      args: [title, slug, description || null, cover_image || null, order ?? 0, published !== false, collection_id]
+    const album = await prisma.album.create({
+      data: {
+        title,
+        slug: slugify(title),
+        description: description || null,
+        cover_image: cover_image || null,
+        order: order ?? 0,
+        published: published !== false,
+        collection_id: Number(collection_id),
+      },
     });
-    const { rows } = await db.execute({ sql: 'SELECT * FROM albums WHERE id = ?', args: [result.lastInsertRowid] });
-    res.status(201).json(rows[0]);
+    res.status(201).json(album);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -64,20 +100,22 @@ router.post('/', authMiddleware, async (req, res) => {
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
     const { title, description, cover_image, order, published, collection_id } = req.body;
-    const slug = title ? slugify(title) : undefined;
-    await db.execute({
-      sql: `UPDATE albums SET title=COALESCE(?,title), slug=COALESCE(?,slug), description=?, cover_image=COALESCE(?,cover_image), "order"=COALESCE(?,\"order\"), published=COALESCE(?,published), collection_id=COALESCE(?,collection_id), updated_at=NOW() WHERE id=?`,
-      args: [title || null, slug || null, description ?? null, cover_image || null, order ?? null, published !== undefined ? Boolean(published) : null, collection_id || null, req.params.id]
-    });
-    const { rows } = await db.execute({ sql: 'SELECT * FROM albums WHERE id = ?', args: [req.params.id] });
-    res.json(rows[0]);
+    const data = {};
+    if (title !== undefined)        { data.title = title; data.slug = slugify(title); }
+    if (description !== undefined)  data.description = description;
+    if (cover_image !== undefined)  data.cover_image = cover_image;
+    if (order !== undefined)        data.order = order;
+    if (published !== undefined)    data.published = Boolean(published);
+    if (collection_id !== undefined) data.collection_id = Number(collection_id);
+    const album = await prisma.album.update({ where: { id: Number(req.params.id) }, data });
+    res.json(album);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE /api/albums/:id — admin
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
-    await db.execute({ sql: 'DELETE FROM albums WHERE id = ?', args: [req.params.id] });
+    await prisma.album.delete({ where: { id: Number(req.params.id) } });
     res.json({ message: 'Álbum removido' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

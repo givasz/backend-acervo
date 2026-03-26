@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id         Int      @id @default(autoincrement())
+  email      String   @unique
+  password   String
+  name       String
+  role       String   @default("admin")
+  created_at DateTime @default(now())
+
+  @@map("users")
+}
+
+model Collection {
+  id          Int      @id @default(autoincrement())
+  name        String
+  slug        String   @unique
+  description String?
+  cover_image String?
+  order       Int      @default(0)
+  published   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+  albums      Album[]
+
+  @@map("collections")
+}
+
+model Album {
+  id            Int        @id @default(autoincrement())
+  title         String
+  slug          String
+  description   String?
+  cover_image   String?
+  order         Int        @default(0)
+  published     Boolean    @default(true)
+  collection_id Int
+  created_at    DateTime   @default(now())
+  updated_at    DateTime   @updatedAt
+  collection    Collection @relation(fields: [collection_id], references: [id], onDelete: Cascade)
+  images        Image[]
+
+  @@unique([collection_id, slug])
+  @@map("albums")
+}
+
+model Image {
+  id         Int            @id @default(autoincrement())
+  filename   String
+  url        String
+  title      String?
+  order      Int            @default(0)
+  media_type String         @default("image")
+  album_id   Int
+  created_at DateTime       @default(now())
+  updated_at DateTime       @updatedAt
+  album      Album          @relation(fields: [album_id], references: [id], onDelete: Cascade)
+  metadata   ImageMetadata?
+
+  @@map("images")
+}
+
+model ImageMetadata {
+  id              Int     @id @default(autoincrement())
+  image_id        Int     @unique
+  collection_name String?
+  tipo_acervo     String?
+  numero_registro String?
+  fundo           String?
+  funcao          String?
+  data_producao   String?
+  local           String?
+  genero          String?
+  tipo_documental String?
+  suporte         String?
+  dimensoes       String?
+  autor_producao  String?
+  conteudo        String?
+  tags            String?
+  extra_fields    String?
+  image           Image   @relation(fields: [image_id], references: [id], onDelete: Cascade)
+
+  @@map("image_metadata")
+}
+
+model Setting {
+  key   String @id
+  value String
+
+  @@map("settings")
+}

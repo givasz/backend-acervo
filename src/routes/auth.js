@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { db } = require('../db/database');
+const { prisma } = require('../db/database');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'acervo_maria_conceicao_secret_2024';
 
@@ -11,14 +11,17 @@ router.post('/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email e senha são obrigatórios' });
 
-    const result = await db.execute({ sql: 'SELECT * FROM users WHERE email = ?', args: [email] });
-    const user = result.rows[0];
+    const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return res.status(401).json({ error: 'Credenciais inválidas' });
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) return res.status(401).json({ error: 'Credenciais inválidas' });
 
-    const token = jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(
+      { id: user.id, email: user.email, name: user.name, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -29,12 +32,11 @@ router.post('/login', async (req, res) => {
 router.post('/change-password', require('../middleware/auth').authMiddleware, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
-    const result = await db.execute({ sql: 'SELECT * FROM users WHERE id = ?', args: [req.user.id] });
-    const user = result.rows[0];
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
     const valid = await bcrypt.compare(currentPassword, user.password);
     if (!valid) return res.status(401).json({ error: 'Senha atual incorreta' });
     const hash = await bcrypt.hash(newPassword, 10);
-    await db.execute({ sql: 'UPDATE users SET password = ? WHERE id = ?', args: [hash, req.user.id] });
+    await prisma.user.update({ where: { id: req.user.id }, data: { password: hash } });
     res.json({ message: 'Senha alterada com sucesso' });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -24,6 +24,28 @@ const upload = multer({
   },
 });
 
+// Upload genérico de arquivo (PDF ou imagem) — ex.: PDFs de poesias
+const fileUpload = multer({
+  storage,
+  limits: { fileSize: 30 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok =
+      file.mimetype === 'application/pdf' ||
+      file.mimetype === 'application/x-pdf' ||
+      file.mimetype.startsWith('image/');
+    if (ok) cb(null, true);
+    else cb(new Error('Apenas PDF ou imagem são permitidos'));
+  },
+});
+
+// POST /api/upload/file — admin
+router.post('/file', authMiddleware, fileUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Arquivo não enviado' });
+    res.json({ url: `/uploads/${req.file.filename}`, filename: req.file.originalname });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // POST /api/upload/cover
 router.post('/cover', authMiddleware, upload.single('cover'), async (req, res) => {
   try {

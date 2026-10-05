@@ -57,6 +57,11 @@ const upload = multer({
   },
 });
 
+// O multer entrega o nome original em latin1; converte para UTF-8 (acentos)
+function originalName(file) {
+  return Buffer.from(file.originalname, 'latin1').toString('utf8');
+}
+
 function flattenImage(img) {
   const { metadata, ...rest } = img;
   return {
@@ -121,7 +126,7 @@ router.post('/upload', authMiddleware, upload.array('images', 50), async (req, r
         data: {
           filename: file.filename,
           url: `/uploads/${file.filename}`,
-          title: file.originalname.replace(/\.[^/.]+$/, ''),
+          title: originalName(file).replace(/\.[^/.]+$/, ''),
           album_id: Number(album_id),
           media_type: isVideo ? 'video' : isDocument ? 'document' : 'image',
         },

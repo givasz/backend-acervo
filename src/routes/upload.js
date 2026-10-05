@@ -42,7 +42,7 @@ const fileUpload = multer({
 router.post('/file', authMiddleware, fileUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Arquivo não enviado' });
-    res.json({ url: `/uploads/${req.file.filename}`, filename: req.file.originalname });
+    res.json({ url: `/uploads/${req.file.filename}`, filename: Buffer.from(req.file.originalname, 'latin1').toString('utf8') });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
